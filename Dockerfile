@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-# Install uv
+# Install uv flask
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 # Copy project

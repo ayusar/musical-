@@ -40,35 +40,35 @@ async def init():
     ):
         LOGGER(__name__).error("Assistant client variables not defined, exiting...")
         exit()
+
     await sudo()
+
     try:
         users = await get_gbanned()
         for user_id in users:
             BANNED_USERS.add(user_id)
+
         users = await get_banned_users()
         for user_id in users:
             BANNED_USERS.add(user_id)
+
     except:
         pass
+
     await app.start()
+
     for all_module in ALL_MODULES:
         importlib.import_module("AnonXMusic.plugins" + all_module)
+
     LOGGER("AnonXMusic.plugins").info("Successfully Imported Modules...")
+
     await userbot.start()
     await Anony.start()
-    try:
-        await Anony.stream_call("https://te.legra.ph/file/29f784eb49d230ab62e9e.mp4")
-    except NoActiveGroupCall:
-        LOGGER("AnonXMusic").error(
-            "Please turn on the videochat of your log group\channel.\n\nStopping Bot..."
-        )
-        exit()
-    except:
-        pass
 
     await Anony.decorators()
     await idle()
     await app.stop()
+
     LOGGER("AnonXMusic").info("Stopping AnonX Music Bot...")
 
 

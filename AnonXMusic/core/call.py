@@ -1,3 +1,4 @@
+# AnonXMusic/core/call.py
 import asyncio
 import os
 from datetime import datetime, timedelta
@@ -42,8 +43,48 @@ from AnonXMusic.platforms.Youtube import cookie_txt_file
 autoend = {}
 counter = {}
 
+PLAYBACK_DIRS = ["playback"]
+
+
+def _cleanup_cache_file_(file_path: str):
+    """Delete a cached playback file (speed/bass/eq) but never touch the original downloads."""
+    try:
+        if not file_path:
+            return
+        # Only delete files that live inside the playback/ cache directory
+        abs_path = os.path.abspath(file_path)
+        playback_root = os.path.abspath("playback")
+        if abs_path.startswith(playback_root) and os.path.isfile(abs_path):
+            os.remove(abs_path)
+            # Remove parent dir if now empty (keeps playback/ itself)
+            parent = os.path.dirname(abs_path)
+            if parent != playback_root:
+                try:
+                    if not os.listdir(parent):
+                        os.rmdir(parent)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+def _cleanup_chat_cache_(chat_id):
+    """Remove all cached effect files stored in the db entry for a chat."""
+    try:
+        track = db.get(chat_id)
+        if not track:
+            return
+        entry = track[0]
+        for key in ("speed_path", "bass_path", "eq_path"):
+            path = entry.get(key)
+            if path:
+                _cleanup_cache_file_(path)
+    except Exception:
+        pass
+
 
 async def _clear_(chat_id):
+    _cleanup_chat_cache_(chat_id)
     db[chat_id] = []
     await remove_active_video_chat(chat_id)
     await remove_active_chat(chat_id)
@@ -220,6 +261,124 @@ class Call(PyTgCalls):
             db[chat_id][0]["speed_path"] = out
             db[chat_id][0]["speed"] = speed
 
+    async def bassboost_stream(self, chat_id: int, file_path, level, playing):
+        assistant = await group_assistant(self, chat_id)
+        old_bass = (playing[0]).get("bass_path")
+        if old_bass:
+            _cleanup_cache_file_(old_bass)
+        if str(level) != str("0"):
+            base = os.path.basename(file_path)
+            chatdir = os.path.join(os.getcwd(), "playback", f"bass{level}")
+            if not os.path.isdir(chatdir):
+                os.makedirs(chatdir)
+            out = os.path.join(chatdir, base)
+            if not os.path.isfile(out):
+                proc = await asyncio.create_subprocess_shell(
+                    cmd=(
+                        "ffmpeg "
+                        "-i "
+                        f"{file_path} "
+                        "-af "
+                        f"bass=g={level} "
+                        f"{out}"
+                    ),
+                    stdin=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await proc.communicate()
+        else:
+            out = file_path
+        dur = await asyncio.get_event_loop().run_in_executor(None, check_duration, out)
+        dur = int(dur)
+        played, con_seconds = speed_converter(playing[0]["played"], 1.0)
+        duration = seconds_to_min(dur)
+        stream = (
+            MediaStream(
+                out,
+                audio_parameters=AudioQuality.HIGH,
+                video_parameters=VideoQuality.SD_480p,
+                ffmpeg_parameters=f"-ss {played} -to {duration}",
+            )
+            if playing[0]["streamtype"] == "video"
+            else MediaStream(
+                out,
+                audio_parameters=AudioQuality.HIGH,
+                ffmpeg_parameters=f"-ss {played} -to {duration}",
+                video_flags=MediaStream.Flags.IGNORE,
+            )
+        )
+        if str(db[chat_id][0]["file"]) == str(file_path):
+            await assistant.play(chat_id, stream)
+        else:
+            raise AssistantErr("Umm")
+        if str(db[chat_id][0]["file"]) == str(file_path):
+            db[chat_id][0]["bass_path"] = out if str(level) != str("0") else None
+            db[chat_id][0]["bass"] = level
+
+    # Equalizer presets: (low_gain, mid_gain, high_gain)
+    EQ_PRESETS = {
+        "flat":       (0,   0,   0),
+        "bass_boost": (8,   2,   0),
+        "rock":       (5,   0,   4),
+        "pop":        (2,   4,   2),
+        "vocal":      (-2,  6,   3),
+        "lofi":       (4,  -2,  -4),
+    }
+
+    async def equalizer_stream(self, chat_id: int, file_path, preset, playing):
+        assistant = await group_assistant(self, chat_id)
+        old_eq = (playing[0]).get("eq_path")
+        if old_eq:
+            _cleanup_cache_file_(old_eq)
+        gains = self.EQ_PRESETS.get(preset, (0, 0, 0))
+        low_g, mid_g, high_g = gains
+        if (low_g, mid_g, high_g) != (0, 0, 0):
+            base = os.path.basename(file_path)
+            chatdir = os.path.join(os.getcwd(), "playback", f"eq_{preset}")
+            if not os.path.isdir(chatdir):
+                os.makedirs(chatdir)
+            out = os.path.join(chatdir, base)
+            if not os.path.isfile(out):
+                af = (
+                    f"equalizer=f=100:width_type=o:width=2:g={low_g},"
+                    f"equalizer=f=1000:width_type=o:width=2:g={mid_g},"
+                    f"equalizer=f=8000:width_type=o:width=2:g={high_g}"
+                )
+                proc = await asyncio.create_subprocess_shell(
+                    cmd=f'ffmpeg -i {file_path} -af "{af}" {out}',
+                    stdin=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await proc.communicate()
+        else:
+            out = file_path
+        dur = await asyncio.get_event_loop().run_in_executor(None, check_duration, out)
+        dur = int(dur)
+        played, con_seconds = speed_converter(playing[0]["played"], 1.0)
+        duration = seconds_to_min(dur)
+        stream = (
+            MediaStream(
+                out,
+                audio_parameters=AudioQuality.HIGH,
+                video_parameters=VideoQuality.SD_480p,
+                ffmpeg_parameters=f"-ss {played} -to {duration}",
+            )
+            if playing[0]["streamtype"] == "video"
+            else MediaStream(
+                out,
+                audio_parameters=AudioQuality.HIGH,
+                ffmpeg_parameters=f"-ss {played} -to {duration}",
+                video_flags=MediaStream.Flags.IGNORE,
+            )
+        )
+        if str(db[chat_id][0]["file"]) == str(file_path):
+            await assistant.play(chat_id, stream)
+        else:
+            raise AssistantErr("Umm")
+        if str(db[chat_id][0]["file"]) == str(file_path):
+            db[chat_id][0]["eq_path"] = out if (low_g, mid_g, high_g) != (0, 0, 0) else None
+            db[chat_id][0]["eq_preset"] = preset
+
     async def force_stop_stream(self, chat_id: int):
         assistant = await group_assistant(self, chat_id)
         try:
@@ -358,6 +517,9 @@ class Call(PyTgCalls):
             if popped:
                 rem = popped["file"]
                 autoclean.remove(rem)
+                # Clean any effect-cached version of the popped track
+                for key in ("speed_path", "bass_path", "eq_path"):
+                    _cleanup_cache_file_(popped.get(key))
             if not check:
                 await _clear_(chat_id)
                 return await client.leave_call(chat_id)

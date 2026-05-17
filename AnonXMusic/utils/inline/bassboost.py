@@ -1,5 +1,8 @@
 # AnonXMusic/utils/inline/bassboost.py
-from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup(_, chat_id):
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+
+def bassboost_markup(_, chat_id):
     upl = InlineKeyboardMarkup(
         [
             [
